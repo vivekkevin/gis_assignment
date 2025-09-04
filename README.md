@@ -66,7 +66,7 @@ bengaluru-gis/
 3. Create a `.env` file in the project root:
 
    ```env
-   MAPBOX_TOKEN=your_mapbox_access_token
+   MAPBOX_TOKEN=your_mapbox_access_token - use the token - "pk.eyJ1Ijoidml2ZWtrZXZpbiIsImEiOiJjbTZodWY5NTgwMThrMmtzaXBidmJ2YjZmIn0.rpkBRl6Zl4vb9JOWMf77_w"
    PORT=3000
    ```
 
