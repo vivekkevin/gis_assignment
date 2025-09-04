@@ -54,7 +54,7 @@ bengaluru-gis/
 1. Clone the repository:
    ```bash
    git clone <your-repo-url>
-   cd bengaluru-gis
+   cd gis_assignment
 ````
 
 2. Install dependencies:
