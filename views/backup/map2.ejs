@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Bengaluru Wards — Trees, Schools & Elevation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Mapbox -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.css" rel="stylesheet" />
+  <!-- Charts + geospatial helpers -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+  <!-- Read GeoTIFF in the browser -->
+  <script src="https://cdn.jsdelivr.net/npm/geotiff@2.0.7/dist/geotiff.browser.min.js"></script>
+
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { position: absolute; inset: 0; }
+    /* Right info panel */
+    #panel {
+      position: absolute; right: 12px; top: 12px; width: 320px; max-height: 75%;
+      background: #fff; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,.12);
+      padding: 12px; overflow: auto; font: 13px/1.35 system-ui, sans-serif; z-index: 10;
+    }
+    #panel h3 { margin: 0 0 8px; font-size: 16px; }
+    .metric { display: flex; justify-content: space-between; margin: 6px 0; }
+    #panel small { color:#6b7280 }
+    /* Left toggle panel (Mapbox control style) */
+    .ctrl {
+      padding: 8px 10px; background: #fff; font: 12px/1.2 system-ui, sans-serif;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.15); border-radius: 4px;
+      display: grid; gap: 6px; max-width: 240px;
+    }
+    .ctrl label { display: flex; align-items: center; gap: 6px; }
+  </style>
+</head>
+<body>
+  <!-- Metrics panel -->
+  <div id="panel">
+    <h3>Ward summary</h3>
+    <div class="metric"><span>Ward</span><strong id="ward-name">—</strong></div>
+    <div class="metric"><span>Schools</span><strong id="ward-schools">—</strong></div>
+    <div class="metric"><span>Avg elevation (m)</span><strong id="ward-elev">—</strong></div>
+    <canvas id="tree-pie" height="160"></canvas>
+    <small>Click a ward polygon to update.</small>
+  </div>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.js"></script>
+  <script>
+    // === Config ===
+    mapboxgl.accessToken = "<%= MAPBOX_TOKEN %>"; // Replace with your token
+
+    // Tree type field preferences (fallbacks tried in this order)
+    const TREE_FIELDS = ['TreeName', 'TreeName', 'KGISTreeID', 'type', 'Type', 'tree', 'Tree'];
+
+    // Sources to load
+    const files = [
+      { url: '/data/trees/blr_east_zone_tree.geojson',  color: '#3b82f6', id: 'layer1', label: 'East Zone Trees' },
+      { url: '/data/trees/blr_south_zone_tree.geojson', color: '#ef4444', id: 'layer2', label: 'South Zone Trees' },
+      { url: '/data/trees/blr_west_zone_tree.geojson',  color: '#10b981', id: 'layer3', label: 'West Zone Trees' },
+      { url: '/data/ward/BBMP.geojson',                 color: '#7c3aed', id: 'bbmp',   label: 'BBMP Wards' }
+    ];
+
+    // SINGLE popup instance to prevent multiple popups
+    const popup = new mapboxgl.Popup({ 
+      closeButton: true, 
+      closeOnClick: true,
+      maxWidth: '300px'
+    });
+
+    // Interactive layers in priority order (higher priority = first in array)
+    const INTERACTIVE_LAYERS = [
+      'schools-clusters',     // highest priority
+      'schools-unclustered',  
+      'layer1-point',         // trees
+      'layer2-point', 
+      'layer3-point',
+      'bbmp-fill'            // lowest priority (wards)
+    ];
+
+    // Caches
+    let treesFC = { type:'FeatureCollection', features: [] };
+    let schoolsFC = null;
+    let pieChart = null;
+
+    const PIE_COLORS = ['#60a5fa','#f87171','#34d399','#fbbf24','#a78bfa','#22d3ee','#fb7185','#a3e635','#f472b6','#2dd4bf','#fda4af'];
+
+    // Build map
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [77.5946, 12.9716],
+      zoom: 10
+    });
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+    // Left toggles control
+    const toggle = document.createElement('div');
+    toggle.className = 'mapboxgl-ctrl mapboxgl-ctrl-group ctrl';
+
+    // Existing layer checkboxes
+    for (const { id, label } of files) {
+      const wrap = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+      cb.dataset.layer = id;
+      const span = document.createElement('span');
+      span.textContent = label || id;
+      wrap.appendChild(cb);
+      wrap.appendChild(span);
+      toggle.appendChild(wrap);
+    }
+
+    // DEM checkboxes
+    [
+      ['nasadem_merge', 'DEM Merge']
+    ].forEach(([id, label]) => {
+      const wrap = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+      cb.dataset.layer = id;
+      const span = document.createElement('span');
+      span.textContent = label;
+      wrap.appendChild(cb);
+      wrap.appendChild(span);
+      toggle.appendChild(wrap);
+    });
+
+    [
+      ['terrain3d', '3D Terrain'],
+      ['hillshade', 'Hillshade']
+    ].forEach(([id, label]) => {
+      const wrap = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+      cb.dataset.layer = id;
+      const span = document.createElement('span');
+      span.textContent = label;
+      wrap.appendChild(cb); wrap.appendChild(span);
+      toggle.appendChild(wrap);
+    });
+
+    // Toggle handler
+    function setVisibilityForSet(base, visible) {
+      const vis = visible ? 'visible' : 'none';
+      ['-fill', '-line', '-point'].forEach(suffix => {
+        const lid = `${base}${suffix}`;
+        if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', vis);
+      });
+      if (map.getLayer(base)) map.setLayoutProperty(base, 'visibility', vis);
+    }
+
+    toggle.addEventListener('change', (e) => {
+      const t = e.target;
+      if (!(t && t.matches('input[type="checkbox"][data-layer]'))) return;
+
+      if (t.dataset.layer === 'terrain3d') {
+        if (t.checked) {
+          map.setTerrain({ source: 'mapbox-dem', exaggeration: 1.4 });
+          if (map.getPitch() < 30) map.easeTo({ pitch: 60, bearing: -20, duration: 400 });
+        } else {
+          map.setTerrain(null);
+          map.easeTo({ pitch: 0, duration: 400 });
+        }
+      } else if (t.dataset.layer === 'hillshade') {
+        const vis = t.checked ? 'visible' : 'none';
+        if (map.getLayer('hillshade')) map.setLayoutProperty('hillshade', 'visibility', vis);
+      } else {
+        setVisibilityForSet(t.dataset.layer, t.checked);
+      }
+    });
+
+    map.addControl({ onAdd: () => toggle, onRemove: () => toggle.remove() }, 'top-left');
+
+    // Chart helper
+    function updatePie(counts) {
+      const labels = Object.keys(counts);
+      const data = labels.map(k => counts[k]);
+      const ctx = document.getElementById('tree-pie').getContext('2d');
+      if (pieChart) pieChart.destroy();
+      pieChart = new Chart(ctx, {
+        type: 'pie',
+        data: { labels, datasets: [{ data, backgroundColor: labels.map((_,i)=>PIE_COLORS[i%PIE_COLORS.length]) }] },
+        options: { plugins: { legend: { position: 'bottom' } } }
+      });
+    }
+
+    // Find the first existing tree name field on a feature
+    function getTreeName(props) {
+      for (const key of TREE_FIELDS) {
+        if (props && props[key] != null && props[key] !== '') return props[key];
+      }
+      return 'Unknown';
+    }
+
+    // Extend bounds from a GeoJSON
+    function extendBoundsFromGeoJSON(data, bounds) {
+      function extend(coords) {
+        if (!coords) return;
+        if (Array.isArray(coords[0])) coords.forEach(extend);
+        else if (typeof coords[0] === 'number' && typeof coords[1] === 'number') bounds.extend(coords);
+      }
+      (data.features || []).forEach(f => f.geometry && extend(f.geometry.coordinates));
+    }
+
+    // Average elevation from Mapbox DEM
+    async function meanElevationInPolygon(wardFeature, stepMeters = 250) {
+      const bbox = turf.bbox(wardFeature);
+      const grid = turf.pointGrid(bbox, stepMeters, { units: 'meters', mask: wardFeature });
+
+      let sum = 0, n = 0;
+      for (const pt of grid.features) {
+        const [lng, lat] = pt.geometry.coordinates;
+        const z = map.queryTerrainElevation({ lng, lat }, { exaggerated: false });
+        if (Number.isFinite(z)) { sum += z; n++; }
+      }
+      return n ? (sum / n) : NaN;
+    }
+
+    // === SINGLE UNIFIED CLICK HANDLER ===
+    function handleMapClick(e) {
+      // Query all interactive features at click point
+      const features = map.queryRenderedFeatures(e.point, {
+        layers: INTERACTIVE_LAYERS
+      });
+
+      if (features.length === 0) {
+        // No interactive features - show elevation popup
+        const z = map.queryTerrainElevation(e.lngLat, { exaggerated: false });
+        if (Number.isFinite(z)) {
+          popup.setLngLat(e.lngLat)
+                .setHTML(`<div style="font:12px system-ui">Elevation: <b>${z.toFixed(1)} m</b></div>`)
+                .addTo(map);
+        }
+        return;
+      }
+
+      // Find the highest priority feature
+      let selectedFeature = null;
+      let selectedLayer = null;
+      
+      for (const layer of INTERACTIVE_LAYERS) {
+        const feature = features.find(f => f.layer.id === layer);
+        if (feature) {
+          selectedFeature = feature;
+          selectedLayer = layer;
+          break;
+        }
+      }
+
+      if (!selectedFeature) return;
+
+      // Handle based on feature type
+      if (selectedLayer === 'schools-clusters') {
+        // Expand cluster
+        const clusterId = selectedFeature.properties.cluster_id;
+        map.getSource('schools').getClusterExpansionZoom(clusterId, (err, zoom) => {
+          if (err) return;
+          map.easeTo({ center: selectedFeature.geometry.coordinates, zoom });
+        });
+        
+      } else if (selectedLayer === 'schools-unclustered') {
+  const props = selectedFeature.properties || {};
+
+  // Define which fields to show in the popup (label → property key)
+  const FIELDS = [
+    ['School Name', 'name'],
+    ['Type', 'type'],
+    ['Operator', 'operator'],
+    ['Phone', 'phone'],
+    ['Email', 'email'],
+    ['Website', 'website'],
+    ['Religion', 'religion'],
+    ['Grades', 'grades'],
+    ['Opening Hours', 'opening_hours'],
+    ['Street', 'addr:street'],
+    ['Postcode', 'addr:postcode'],
+    ['District', 'addr:district']
+  ];
+
+  // Keep only available values (not null/empty/"NULL")
+  const rows = FIELDS
+    .map(([label, key]) => [label, props[key]])
+    .filter(([_, val]) => val && val !== 'NULL' && val !== '');
+
+  // Build the popup HTML
+  const html = `
+    <div style="font:13px system-ui,sans-serif; min-width:220px; max-width:280px;">
+      <div style="font-weight:600; font-size:14px; margin-bottom:6px">
+        🏫 ${props.name || 'School'}
+      </div>
+      <table style="width:100%; border-collapse:collapse; font-size:12px;">
+        ${rows.map(([label, val]) => `
+          <tr>
+            <td style="padding:3px 6px; color:#6b7280;">${label}</td>
+            <td style="padding:3px 6px; font-weight:500;">${val}</td>
+          </tr>
+        `).join('')}
+      </table>
+    </div>
+  `;
+
+  popup.setLngLat(selectedFeature.geometry.coordinates)
+       .setHTML(html)
+       .addTo(map);
+      } else if (selectedLayer.includes('-point')) {
+  // Show tree popup with detailed attributes
+  const props = selectedFeature.properties || {};
+  const name = props.TreeName || getTreeName(props);
+
+  const rows = [
+    ['Tree Name', name],
+    ['OBJECTID', props.OBJECTID],
+    ['KGISTreeID', props.KGISTreeID],
+    ['DepartmentCode', props.DepartmentCode],
+    ['KGISCode', props.KGISCode],
+    ['Ward Number', props.WardNumber || props.Ward_No],
+    ['KGISVillageID', props.KGISVillageID],
+    ['Height (m)', props.height],
+    ['DBH (cm)', props.dbh]
+  ].filter(([_, v]) => v !== undefined && v !== null && v !== '');
+
+const html = `
+  <div style="
+    font: 13px/1.4 system-ui, sans-serif; 
+    padding:12px 14px; 
+    max-width:280px;
+  ">
+    <!-- Header -->
+    <div style="
+      font-size:14px; 
+      font-weight:600; 
+      margin-bottom:8px; 
+      color:#111827;
+      border-bottom:1px solid #e5e7eb; 
+      padding-bottom:6px;
+      display:flex; 
+      align-items:center; 
+      gap:6px;
+    ">
+      🌳 ${props.TreeName || name || 'Unknown Tree'}
+    </div>
+
+    <!-- Attributes -->
+    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+      ${[
+        ['OBJECTID', props.OBJECTID],
+        ['KGISTreeID', props.KGISTreeID],
+        ['DepartmentCode', props.DepartmentCode],
+        ['KGISCode', props.KGISCode],
+        ['Ward Number', props.WardNumber],
+        ['KGISVillageID', props.KGISVillageID]
+      ].filter(([_,v]) => v).map(([k,v]) => `
+        <tr>
+          <td style="padding:4px 6px; color:#6b7280; white-space:nowrap;">${k}</td>
+          <td style="padding:4px 6px; text-align:right; font-weight:500; color:#111827; word-break:break-word;">${v}</td>
+        </tr>
+      `).join('')}
+    </table>
+  </div>
+`;
+
+
+
+  popup.setLngLat(selectedFeature.geometry.coordinates).setHTML(html).addTo(map);
+} else if (selectedLayer === 'bbmp-fill') {
+        // Handle ward click
+        handleWardClick(selectedFeature, e.lngLat);
+      }
+    }
+
+    // Ward click handler
+    async function handleWardClick(ward, lngLat) {
+      const props = ward.properties || {};
+
+      // Highlight the clicked polygon
+      if (typeof ward.id === 'number' || typeof ward.id === 'string') {
+        const sel = ['==', ['id'], ward.id];
+        if (map.getLayer('bbmp-highlight')) map.setFilter('bbmp-highlight', sel);
+        if (map.getLayer('bbmp-highlight-fill')) map.setFilter('bbmp-highlight-fill', sel);
+      }
+
+      // Update panel
+      const wardNo = props.KGISWardNo ?? props.ward_no ?? props.Ward_No ?? props.WARDNO ?? null;
+      const wardName = props.KGISWardName ?? props.ward_name ?? props.name ?? props.Ward_Name ?? (wardNo ? `Ward #${wardNo}` : '—');
+      
+      document.getElementById('ward-name').textContent = wardName;
+
+      // Trees inside → pie
+      const treesInside = treesFC.features.length ? turf.pointsWithinPolygon(treesFC, ward) : { features: [] };
+      const counts = {};
+      for (const f of treesInside.features) {
+        const name = getTreeName(f.properties || {});
+        counts[name] = (counts[name] || 0) + 1;
+      }
+      updatePie(counts);
+
+      // Schools inside → count
+      let schoolCount = 0;
+      if (schoolsFC) {
+        schoolCount = turf.pointsWithinPolygon(schoolsFC, ward).features.length;
+      }
+      document.getElementById('ward-schools').textContent = schoolCount;
+
+      // Avg elevation (async)
+      document.getElementById('ward-elev').textContent = '…';
+      const avg = await meanElevationInPolygon(ward);
+      document.getElementById('ward-elev').textContent = Number.isFinite(avg) ? avg.toFixed(1) : '—';
+
+      // Ward popup
+      const rows = [
+        ['KGISWardName', wardName],
+        ['KGISWardNo', wardNo],
+        ['KGISWardID', props.KGISWardID],
+        ['KGISWardCode', props.KGISWardCode],
+        ['LGD_WardCode', props.LGD_WardCode],
+        ['KGISTownCode', props.KGISTownCode]
+      ].filter(([_, v]) => v !== undefined && v !== null && v !== '');
+
+      const html = `
+        <div style="font: 12px system-ui, sans-serif">
+          <strong style="font-size:13px">${wardName}</strong>
+          <table style="margin-top:6px;border-collapse:collapse">
+            ${rows.map(([k,v]) => `
+              <tr>
+                <td style="padding:2px 8px 2px 0;color:#6b7280">${k}</td>
+                <td><strong>${v}</strong></td>
+              </tr>`).join('')}
+          </table>
+        </div>
+      `;
+
+      popup.setLngLat(lngLat).setHTML(html).addTo(map);
+    }
+
+    // Cursor management
+    function setupCursorHandlers() {
+      INTERACTIVE_LAYERS.forEach(layerId => {
+        map.on('mouseenter', layerId, () => map.getCanvas().style.cursor = 'pointer');
+        map.on('mouseleave', layerId, () => map.getCanvas().style.cursor = '');
+      });
+    }
+
+    // === Map load ===
+    map.on('load', async () => {
+      const bounds = new mapboxgl.LngLatBounds();
+
+      // Load schools once
+      try {
+        const schoolsResp = await fetch('/data/school/Overpass_school.geojson');
+        if (schoolsResp.ok) schoolsFC = await schoolsResp.json();
+      } catch (e) {
+        console.warn('Could not load schools:', e);
+      }
+
+      // Load declared files
+      for (const { url, color, id } of files) {
+        try {
+          const resp = await fetch(url);
+          if (!resp.ok) throw new Error(`Failed to load ${url}`);
+          const data = await resp.json();
+
+          // Collect tree points
+          if (id === 'layer1' || id === 'layer2' || id === 'layer3') {
+            const pts = (data.features || []).filter(f => f.geometry?.type === 'Point');
+            treesFC.features.push(...pts);
+          }
+
+          // Add source with generateId for wards
+          if (id === 'bbmp') {
+            map.addSource(id, { type: 'geojson', data, generateId: true });
+          } else {
+            map.addSource(id, { type: 'geojson', data });
+          }
+
+          // Add layers
+          map.addLayer({
+            id: `${id}-fill`,
+            type: 'fill',
+            source: id,
+            filter: ['==', ['geometry-type'], 'Polygon'],
+            paint: { 'fill-color': color, 'fill-opacity': 0.18 }
+          });
+
+          map.addLayer({
+            id: `${id}-line`,
+            type: 'line',
+            source: id,
+            paint: { 'line-color': color, 'line-width': 1.2 }
+          });
+
+          map.addLayer({
+            id: `${id}-point`,
+            type: 'circle',
+            source: id,
+            filter: ['==', ['geometry-type'], 'Point'],
+            paint: {
+              'circle-radius': 4,
+              'circle-color': color,
+              'circle-stroke-width': 1,
+              'circle-stroke-color': '#1f2937'
+            }
+          });
+
+          // Add highlight layers for wards
+          if (id === 'bbmp') {
+            map.addLayer({
+              id: 'bbmp-highlight-fill',
+              type: 'fill',
+              source: 'bbmp',
+              filter: ['==', ['id'], -1],
+              paint: { 'fill-color': '#fde68a', 'fill-opacity': 0.25 }
+            }, 'bbmp-line');
+
+            map.addLayer({
+              id: 'bbmp-highlight',
+              type: 'line',
+              source: 'bbmp',
+              filter: ['==', ['id'], -1],
+              paint: { 'line-color': '#f59e0b', 'line-width': 3 }
+            });
+          }
+
+          extendBoundsFromGeoJSON(data, bounds);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+
+      // Schools clustered layers
+      if (schoolsFC) {
+        map.addSource('schools', {
+          type: 'geojson',
+          data: schoolsFC,
+          cluster: true, clusterRadius: 40, clusterMaxZoom: 14
+        });
+
+        map.addLayer({
+          id: 'schools-clusters',
+          type: 'circle',
+          source: 'schools',
+          filter: ['has', 'point_count'],
+          paint: {
+            'circle-color': [
+              'step', ['get', 'point_count'],
+              '#9ae6b4', 25, '#4ade80', 100, '#22c55e', 250, '#16a34a'
+            ],
+            'circle-radius': [
+              'step', ['get', 'point_count'],
+              12, 25, 18, 100, 24, 250, 32
+            ],
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#ffffff'
+          }
+        });
+
+        map.addLayer({
+          id: 'schools-cluster-count',
+          type: 'symbol',
+          source: 'schools',
+          filter: ['has', 'point_count'],
+          layout: {
+            'text-field': ['get', 'point_count_abbreviated'],
+            'text-size': 12
+          },
+          paint: { 'text-color': '#111827' }
+        });
+
+        map.addLayer({
+          id: 'schools-unclustered',
+          type: 'circle',
+          source: 'schools',
+          filter: ['!', ['has', 'point_count']],
+          paint: {
+            'circle-radius': 5,
+            'circle-color': '#2563eb',
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#ffffff'
+          }
+        });
+      }
+
+      // DEM overlays
+      const beforeId = map.getLayer('layer1-point') ? 'layer1-point' : undefined;
+
+      map.addSource('nasadem_merge', {
+        type: 'image',
+        url: '/data/dem/nasadem_merge.png',
+        coordinates: [
+          [77.4598611, 13.1426389],
+          [77.7843056, 13.1426389],
+          [77.7843056, 12.8334722],
+          [77.4598611, 12.8334722]
+        ]
+      });
+      map.addLayer({
+        id: 'nasadem_merge',
+        type: 'raster',
+        source: 'nasadem_merge',
+        paint: { 'raster-opacity': 0.75 }
+      }, beforeId);
+
+      // Mapbox DEM source
+      map.addSource('mapbox-dem', {
+        type: 'raster-dem',
+        url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+        tileSize: 512,
+        maxzoom: 14
+      });
+
+      // 3D terrain
+      map.setTerrain({ source: 'mapbox-dem', exaggeration: 1.4 });
+      map.easeTo({ pitch: 60, bearing: -20, duration: 800 });
+
+      // Hillshade
+      map.addLayer({
+        id: 'hillshade',
+        type: 'hillshade',
+        source: 'mapbox-dem',
+        layout: { visibility: 'visible' },
+        paint: { 'hillshade-exaggeration': 0.6 }
+      });
+
+      // Sky layer
+      map.addLayer({
+        id: 'sky',
+        type: 'sky',
+        paint: {
+          'sky-type': 'atmosphere',
+          'sky-atmosphere-sun-intensity': 10
+        }
+      });
+
+      // Fit to content
+      if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 24, maxZoom: 15 });
+
+      // Apply toggle states
+      toggle.querySelectorAll('input[data-layer]').forEach(cb => {
+        setVisibilityForSet(cb.dataset.layer, cb.checked);
+      });
+
+      // Setup cursor handlers
+      setupCursorHandlers();
+
+      // SINGLE click handler for entire map
+      map.on('click', handleMapClick);
+    });
+  </script>
+</body>
+</html>

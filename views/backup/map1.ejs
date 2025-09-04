@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Bengaluru Wards — Trees, Schools & Elevation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Mapbox -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.css" rel="stylesheet" />
+  <!-- Charts + geospatial helpers -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+  <!-- Read GeoTIFF in the browser -->
+  <script src="https://cdn.jsdelivr.net/npm/geotiff@2.0.7/dist/geotiff.browser.min.js"></script>
+
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { position: absolute; inset: 0; }
+    /* Right info panel */
+    #panel {
+      position: absolute; right: 12px; top: 12px; width: 320px; max-height: 75%;
+      background: #fff; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,.12);
+      padding: 12px; overflow: auto; font: 13px/1.35 system-ui, sans-serif; z-index: 10;
+    }
+    #panel h3 { margin: 0 0 8px; font-size: 16px; }
+    .metric { display: flex; justify-content: space-between; margin: 6px 0; }
+    #panel small { color:#6b7280 }
+    /* Left toggle panel (Mapbox control style) */
+    .ctrl {
+      padding: 8px 10px; background: #fff; font: 12px/1.2 system-ui, sans-serif;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.15); border-radius: 4px;
+      display: grid; gap: 6px; max-width: 240px;
+    }
+    .ctrl label { display: flex; align-items: center; gap: 6px; }
+  </style>
+</head>
+<body>
+  <!-- Metrics panel -->
+  <div id="panel">
+    <h3>Ward summary</h3>
+    <div class="metric"><span>Ward</span><strong id="ward-name">—</strong></div>
+    <div class="metric"><span>Schools</span><strong id="ward-schools">—</strong></div>
+    <div class="metric"><span>Avg elevation (m)</span><strong id="ward-elev">—</strong></div>
+    <canvas id="tree-pie" height="160"></canvas>
+    <small>Click a ward polygon to update.</small>
+  </div>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.js"></script>
+  <script>
+    // === Config ===
+    mapboxgl.accessToken = "<%= MAPBOX_TOKEN %>";
+
+    // Tree type field preferences (fallbacks tried in this order)
+    const TREE_FIELDS = ['TreeName', 'Tree_Species', 'species', 'type', 'Type', 'tree', 'Tree'];
+
+    // Sources to load
+    const files = [
+      { url: '/data/trees/blr_east_zone_tree.geojson',  color: '#3b82f6', id: 'layer1', label: 'East Zone Trees' },
+      { url: '/data/trees/blr_south_zone_tree.geojson', color: '#ef4444', id: 'layer2', label: 'South Zone Trees' },
+      { url: '/data/trees/blr_west_zone_tree.geojson',  color: '#10b981', id: 'layer3', label: 'West Zone Trees' },
+      { url: '/data/ward/BBMP.geojson',                 color: '#7c3aed', id: 'bbmp',   label: 'BBMP Wards' }
+    ];
+
+    // 1) One shared popup
+    const popup = new mapboxgl.Popup({ closeButton: true, closeOnClick: true });
+
+    // 2) Layers that have their own click handlers
+    const INTERACTIVE_LAYERS = [
+    'layer1-point','layer2-point','layer3-point', // trees
+    'schools-unclustered','schools-clusters',     // schools
+    'bbmp-fill'                                   // wards
+    ];
+    
+
+    // Caches
+    let treesFC = { type:'FeatureCollection', features: [] };
+    let schoolsFC = null; // loaded once
+    let pieChart = null;
+
+    const PIE_COLORS = ['#60a5fa','#f87171','#34d399','#fbbf24','#a78bfa','#22d3ee','#fb7185','#a3e635','#f472b6','#2dd4bf','#fda4af'];
+
+    // Build map
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [77.5946, 12.9716],
+      zoom: 10
+    });
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+// Left toggles control
+const toggle = document.createElement('div');
+// add Mapbox control styling + your custom class
+toggle.className = 'mapboxgl-ctrl mapboxgl-ctrl-group ctrl';
+
+// Existing layer checkboxes (from `files`)
+for (const { id, label } of files) {
+  const wrap = document.createElement('label');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = true;
+  cb.dataset.layer = id;
+  const span = document.createElement('span');
+  span.textContent = label || id;
+  wrap.appendChild(cb);
+  wrap.appendChild(span);
+  toggle.appendChild(wrap);
+}
+
+// ADD: DEM checkboxes
+[
+//   ['nasadem12',  'DEM Tile 12'],
+//   ['nasadem13',  'DEM Tile 13'],
+  ['nasadem_merge', 'DEM Merge']
+].forEach(([id, label]) => {
+  const wrap = document.createElement('label');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = true;
+  cb.dataset.layer = id;
+  const span = document.createElement('span');
+  span.textContent = label;
+  wrap.appendChild(cb);
+  wrap.appendChild(span);
+  toggle.appendChild(wrap);
+});
+
+[
+  ['terrain3d', '3D Terrain'],
+  ['hillshade', 'Hillshade']
+].forEach(([id, label]) => {
+  const wrap = document.createElement('label');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = true;
+  cb.dataset.layer = id;  // custom ids
+  const span = document.createElement('span');
+  span.textContent = label;
+  wrap.appendChild(cb); wrap.appendChild(span);
+  toggle.appendChild(wrap);
+});
+
+// Handle clicks
+toggle.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!(t && t.matches('input[type="checkbox"][data-layer]'))) return;
+
+if (t.dataset.layer === 'terrain3d') {
+  if (t.checked) {
+    map.setTerrain({ source: 'mapbox-dem', exaggeration: 1.4 });
+    if (map.getPitch() < 30) map.easeTo({ pitch: 60, bearing: -20, duration: 400 });
+  } else {
+    map.setTerrain(null);
+    map.easeTo({ pitch: 0, duration: 400 });
+  }
+}
+  if (t.dataset.layer === 'hillshade') {
+    const vis = t.checked ? 'visible' : 'none';
+    if (map.getLayer('hillshade')) map.setLayoutProperty('hillshade', 'visibility', vis);
+  }
+});
+
+map.addControl({ onAdd: () => toggle, onRemove: () => toggle.remove() }, 'top-left');
+
+// Toggle handler
+function setVisibilityForSet(base, visible) {
+  const vis = visible ? 'visible' : 'none';
+  // vector sublayers
+  ['-fill', '-line', '-point'].forEach(suffix => {
+    const lid = `${base}${suffix}`;
+    if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', vis);
+  });
+  // single-layer base (e.g., raster images)
+  if (map.getLayer(base)) map.setLayoutProperty(base, 'visibility', vis);
+}
+
+toggle.addEventListener('change', (e) => {
+  const t = e.target;
+  if (t && t.matches('input[type="checkbox"][data-layer]')) {
+    setVisibilityForSet(t.dataset.layer, t.checked);
+  }
+});
+
+// OPTIONAL: call this **after** you add the DEM layers to apply initial states
+function applyToggleStateFor(ids) {
+  ids.forEach(id => {
+    const cb = toggle.querySelector(`input[data-layer="${id}"]`);
+    if (cb) setVisibilityForSet(id, cb.checked);
+  });
+}
+// usage (after creating nasadem12/nasadem13/nasadem_merge layers):
+// applyToggleStateFor(['nasadem12','nasadem13','nasadem_merge']);
+
+
+    // Chart helper
+    function updatePie(counts) {
+      const labels = Object.keys(counts);
+      const data = labels.map(k => counts[k]);
+      const ctx = document.getElementById('tree-pie').getContext('2d');
+      if (pieChart) pieChart.destroy();
+      pieChart = new Chart(ctx, {
+        type: 'pie',
+        data: { labels, datasets: [{ data, backgroundColor: labels.map((_,i)=>PIE_COLORS[i%PIE_COLORS.length]) }] },
+        options: { plugins: { legend: { position: 'bottom' } } }
+      });
+    }
+
+    // Find the first existing tree name field on a feature
+    function getTreeName(props) {
+      for (const key of TREE_FIELDS) {
+        if (props && props[key] != null && props[key] !== '') return props[key];
+      }
+      return 'Unknown';
+    }
+
+    // Extend bounds from a GeoJSON (any geometry)
+    function extendBoundsFromGeoJSON(data, bounds) {
+      function extend(coords) {
+        if (!coords) return;
+        if (Array.isArray(coords[0])) coords.forEach(extend);
+        else if (typeof coords[0] === 'number' && typeof coords[1] === 'number') bounds.extend(coords);
+      }
+      (data.features || []).forEach(f => f.geometry && extend(f.geometry.coordinates));
+    }
+
+
+    //DEM Elevation
+const DEM_TIF_URL = '/data/dem/nasadem_merge_ele.tif';  // or '/data/dem/merged_dem_4326.tif'
+
+    // --- GeoTIFF helpers for elevation ---
+let _dem = { image:null, bbox:null, width:0, height:0, pxW:0, pxH:0, noData:null };
+
+async function ensureDEM() {
+  if (_dem.image) return;
+  if (!window.GeoTIFF) throw new Error('GeoTIFF library not loaded');
+  const tiff  = await GeoTIFF.fromUrl(DEM_TIF_URL);     // geotiff.js
+  const image = await tiff.getImage();
+  const bbox  = image.getBoundingBox();                 // [minX,minY,maxX,maxY] (lon/lat)
+  const width = image.getWidth();
+  const height= image.getHeight();
+  const fd    = image.getFileDirectory();
+  const noData = fd && fd.GDAL_NODATA != null ? parseFloat(fd.GDAL_NODATA) : null;
+
+  _dem = {
+    image, bbox, width, height,
+    pxW: (bbox[2] - bbox[0]) / width,    // degrees per pixel (lon)
+    pxH: (bbox[3] - bbox[1]) / height,   // degrees per pixel (lat)
+    noData
+  };
+}
+
+// Optional: single-point elevation (for “value at location”)
+async function getElevationAtLngLat(lng, lat) {
+  await ensureDEM();
+  const [minX, , , maxY] = _dem.bbox;
+  const x = Math.floor((lng - minX) / _dem.pxW);
+  const y = Math.floor((maxY - lat) / _dem.pxH);
+  if (x<0 || y<0 || x>=_dem.width || y>=_dem.height) return null;
+  const ras = await _dem.image.readRasters({ window:[x, y, x+1, y+1], samples:[0] });
+  const val = ras[0][0];
+  if (_dem.noData != null && val === _dem.noData) return null;
+  return val; // meters
+}
+
+// Average elevation from Mapbox DEM (no GeoTIFF)
+// stepMeters controls sampling density (bigger = faster, rougher)
+async function meanElevationInPolygon(wardFeature, stepMeters = 250) {
+  // Build a sampling grid masked to the ward polygon
+  const bbox = turf.bbox(wardFeature);
+  const grid = turf.pointGrid(bbox, stepMeters, { units: 'meters', mask: wardFeature });
+
+  let sum = 0, n = 0;
+  for (const pt of grid.features) {
+    const [lng, lat] = pt.geometry.coordinates;
+    const z = map.queryTerrainElevation({ lng, lat }, { exaggerated: false });
+    if (Number.isFinite(z)) { sum += z; n++; }
+  }
+  return n ? (sum / n) : NaN;
+}
+
+
+
+    // === Map load ===
+    map.on('load', async () => {
+      const bounds = new mapboxgl.LngLatBounds();
+
+      // Load schools once (for counting + popups)
+      try {
+        const schoolsResp = await fetch('/data/school/Overpass_school.geojson');
+        if (schoolsResp.ok) schoolsFC = await schoolsResp.json();
+      } catch {}
+
+      // Load declared files
+      for (const { url, color, id } of files) {
+        try {
+        const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`Failed to load ${url}`);
+            const data = await resp.json();                  // <-- parse FIRST
+
+            // now it’s safe to use `data`
+            if (id === 'layer1' || id === 'layer2' || id === 'layer3') {
+            const pts = (data.features || []).filter(f => f.geometry?.type === 'Point');
+            treesFC.features.push(...pts);
+            }
+
+        if (id === 'bbmp') {
+        map.addSource(id, { type: 'geojson', data, generateId: true }); // <— important
+        } else {
+        map.addSource(id, { type: 'geojson', data });
+        }
+
+
+
+          map.addLayer({
+            id: `${id}-fill`,
+            type: 'fill',
+            source: id,
+            filter: ['==', ['geometry-type'], 'Polygon'],
+            paint: { 'fill-color': color, 'fill-opacity': 0.18 }
+          });
+
+          map.addLayer({
+            id: `${id}-line`,
+            type: 'line',
+            source: id,
+            paint: { 'line-color': color, 'line-width': 1.2 }
+          });
+
+          map.addLayer({
+            id: `${id}-point`,
+            type: 'circle',
+            source: id,
+            filter: ['==', ['geometry-type'], 'Point'],
+            paint: {
+              'circle-radius': 4,
+              'circle-color': color,
+              'circle-stroke-width': 1,
+              'circle-stroke-color': '#1f2937'
+            }
+          });
+
+        // right after you add bbmp -fill and -line
+        if (id === 'bbmp') {
+        map.addLayer({
+            id: 'bbmp-highlight-fill',
+            type: 'fill',
+            source: 'bbmp',
+            filter: ['==', ['id'], -1],
+            paint: { 'fill-color': '#fde68a', 'fill-opacity': 0.25 }
+        }, 'bbmp-line');
+
+        map.addLayer({
+            id: 'bbmp-highlight',
+            type: 'line',
+            source: 'bbmp',
+            filter: ['==', ['id'], -1],
+            paint: { 'line-color': '#f59e0b', 'line-width': 3 }
+        });
+        }
+
+
+
+          // Tree popups
+          if (id === 'layer1' || id === 'layer2' || id === 'layer3') {
+            map.on('click', `${id}-point`, e => {
+              const p = e.features[0].properties || {};
+              const name = getTreeName(p);
+              const html = `
+                <div style="font-size:12px">
+                  <strong>${name}</strong>
+                  ${p.Ward_No ? `<div>Ward: ${p.Ward_No}</div>`:''}
+                  ${p.height ? `<div>Height: ${p.height} m</div>`:''}
+                  ${p.dbh ? `<div>DBH: ${p.dbh} cm</div>`:''}
+                </div>`;
+              new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
+            });
+            map.on('mouseenter', `${id}-point`, () => map.getCanvas().style.cursor = 'pointer');
+            map.on('mouseleave', `${id}-point`, () => map.getCanvas().style.cursor = '');
+          }
+
+          // Cursor feedback for wards
+          if (id === 'bbmp') {
+            map.on('mouseenter', 'bbmp-fill', () => map.getCanvas().style.cursor = 'pointer');
+            map.on('mouseleave', 'bbmp-fill', () => map.getCanvas().style.cursor = '');
+          }
+
+          extendBoundsFromGeoJSON(data, bounds);
+        } catch (err) {
+          console.error(err);
+          alert(`Error loading ${url}: ${err.message}`);
+        }
+      }
+
+      // Schools clustered layers
+      if (schoolsFC) {
+        map.addSource('schools', {
+          type: 'geojson',
+          data: schoolsFC,
+          cluster: true, clusterRadius: 40, clusterMaxZoom: 14
+        });
+
+        map.addLayer({
+          id: 'schools-clusters',
+          type: 'circle',
+          source: 'schools',
+          filter: ['has', 'point_count'],
+          paint: {
+            'circle-color': [
+              'step', ['get', 'point_count'],
+              '#9ae6b4', 25,
+              '#4ade80', 100,
+              '#22c55e', 250,
+              '#16a34a'
+            ],
+            'circle-radius': [
+              'step', ['get', 'point_count'],
+              12, 25, 18, 100, 24, 250, 32
+            ],
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#ffffff'
+          }
+        });
+
+        map.addLayer({
+          id: 'schools-cluster-count',
+          type: 'symbol',
+          source: 'schools',
+          filter: ['has', 'point_count'],
+          layout: {
+            'text-field': ['get', 'point_count_abbreviated'],
+            'text-size': 12
+          },
+          paint: { 'text-color': '#111827' }
+        });
+
+        map.addLayer({
+          id: 'schools-unclustered',
+          type: 'circle',
+          source: 'schools',
+          filter: ['!', ['has', 'point_count']],
+          paint: {
+            'circle-radius': 5,
+            'circle-color': '#2563eb',
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#ffffff'
+          }
+        });
+
+        // Cluster expand on click
+        // Expand a cluster on click (no extra popups)
+        map.on('click', 'schools-clusters', (e) => {
+        e.originalEvent.cancelBubble = true;  // stop bubbling
+        const f = e.features && e.features[0];
+        if (!f) return;
+        map.getSource('schools').getClusterExpansionZoom(f.properties.cluster_id, (err, zoom) => {
+            if (err) return;
+            map.easeTo({ center: f.geometry.coordinates, zoom });
+        });
+        });
+        map.on('mouseenter', 'schools-clusters', () => map.getCanvas().style.cursor = 'pointer');
+        map.on('mouseleave', 'schools-clusters', () => map.getCanvas().style.cursor = '');
+
+        // School popup
+        // School popup (only school info — suppress ward/elevation popups)
+        map.on('click', 'schools-unclustered', (e) => {
+        e.originalEvent.handledByFeatureClick = true;  // prevent elevation popup
+        const f = e.features[0];
+        const props = f.properties || {};
+        new mapboxgl.Popup()
+            .setLngLat(f.geometry.coordinates)
+            .setHTML(`
+            <div style="font-size:12px">
+                <strong>School</strong>
+                ${props.name ? `<div>${props.name}</div>` : ''}
+                ${props.type ? `<div>Type: ${props.type}</div>` : ''}
+            </div>
+            `)
+            .addTo(map);
+        });
+      }
+
+      // Fit to content
+      if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 24, maxZoom: 15 });
+
+      // Apply checkbox states now that layers exist
+      toggle.querySelectorAll('input[data-layer]').forEach(cb => {
+        setVisibilityForSet(cb.dataset.layer, cb.checked);
+      });
+
+      // === Ward click -> compute summaries ===
+      // Keep this somewhere top-level (once)
+const wardPopup = new mapboxgl.Popup({ closeButton: true, closeOnClick: true });
+
+map.on('click', 'bbmp-fill', async (e) => {
+  const ward = e.features[0];
+  const props = ward.properties || {};
+
+  // 4a) Highlight the clicked polygon (uses generated feature id)
+  if (typeof ward.id === 'number' || typeof ward.id === 'string') {
+    const sel = ['==', ['id'], ward.id];
+    if (map.getLayer('bbmp-highlight'))       map.setFilter('bbmp-highlight', sel);
+    if (map.getLayer('bbmp-highlight-fill'))  map.setFilter('bbmp-highlight-fill', sel);
+  }
+
+  // 4b) Ward name / number for the summary
+  const wardNo   = props.KGISWardNo ?? props.ward_no ?? props.Ward_No ?? props.WARDNO ?? null;
+  const wardName = props.KGISWardName ?? props.ward_name ?? props.name ?? props.Ward_Name ?? (wardNo ? `Ward #${wardNo}` : '—');
+
+  document.getElementById('ward-name').textContent = wardName;
+  const elNo = document.getElementById('ward-no');
+  if (elNo) elNo.textContent = (wardNo ?? '—');
+
+  // 4c) Trees inside → pie
+  const treesInside = treesFC.features.length
+    ? turf.pointsWithinPolygon(treesFC, ward)
+    : { features: [] };
+
+  const counts = {};
+  for (const f of treesInside.features) {
+    const name = getTreeName(f.properties || {});
+    counts[name] = (counts[name] || 0) + 1;
+  }
+  updatePie(counts);
+
+  // 4d) Schools inside → count
+  let schoolCount = 0;
+  if (schoolsFC) {
+    schoolCount = turf.pointsWithinPolygon(schoolsFC, ward).features.length;
+  }
+  document.getElementById('ward-schools').textContent = schoolCount;
+
+  // 4e) Avg elevation (async)
+    document.getElementById('ward-elev').textContent = '…';
+    const avg = await meanElevationInPolygon(ward);
+    document.getElementById('ward-elev').textContent = Number.isFinite(avg) ? avg.toFixed(1) : '—';
+
+
+  // 4f) Tooltip (the attributes you shared)
+  const rows = [
+    ['KGISWardName', wardName],
+    ['KGISWardNo', wardNo],
+    ['KGISWardID', props.KGISWardID],
+    ['KGISWardCode', props.KGISWardCode],
+    ['LGD_WardCode', props.LGD_WardCode],
+    ['KGISTownCode', props.KGISTownCode]
+  ].filter(([_, v]) => v !== undefined && v !== null && v !== '');
+
+  const html = `
+    <div style="font: 12px system-ui, sans-serif">
+      <strong style="font-size:13px">${wardName}</strong>
+      <table style="margin-top:6px;border-collapse:collapse">
+        ${rows.map(([k,v]) => `
+          <tr>
+            <td style="padding:2px 8px 2px 0;color:#6b7280">${k}</td>
+            <td><strong>${v}</strong></td>
+          </tr>`).join('')}
+      </table>
+    </div>
+  `;
+
+  wardPopup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+});
+
+// === DEM overlays (put INSIDE the existing map.on('load', ...)) ===
+
+// === DEM overlays ===
+const beforeId = map.getLayer('layer1-point') ? 'layer1-point' : undefined;
+
+
+// // NASADEM tile 12
+// map.addSource('nasadem12', {
+//   type: 'image',
+//   url: '/data/dem/nasadem12_clip.png',
+//   coordinates: [
+//     [77.4598611, 13.1426389], // UL (minLon, maxLat)
+//     [77.7843056, 13.1426389], // UR (maxLon, maxLat)
+//     [77.7843056, 12.8334722], // LR (maxLon, minLat)
+//     [77.4598611, 12.8334722]  // LL (minLon, minLat)
+//   ]
+// });
+// map.addLayer({
+//   id: 'nasadem12',
+//   type: 'raster',
+//   source: 'nasadem12',
+//   paint: { 'raster-opacity': 1 }
+// }, beforeId);
+
+// // NASADEM tile 13
+// map.addSource('nasadem13', {
+//   type: 'image',
+//   url: '/data/dem/nasadem13_clip.png',
+//   coordinates: [
+//     [77.4598611, 13.1426389],
+//     [77.7843056, 13.1426389],
+//     [77.7843056, 12.8334722],
+//     [77.4598611, 12.8334722]
+//   ]
+// });
+// map.addLayer({
+//   id: 'nasadem13',
+//   type: 'raster',
+//   source: 'nasadem13',
+//   paint: { 'raster-opacity': 0.75 }
+// }, beforeId);
+
+// Merged PNG (optional)
+map.addSource('nasadem_merge', {
+  type: 'image',
+  url: '/data/dem/nasadem_merge.png',
+  coordinates: [
+    [77.4598611, 13.1426389],
+    [77.7843056, 13.1426389],
+    [77.7843056, 12.8334722],
+    [77.4598611, 12.8334722]
+  ]
+});
+map.addLayer({
+  id: 'nasadem_merge',
+  type: 'raster',
+  source: 'nasadem_merge',
+  paint: { 'raster-opacity': 0.75 }
+}, beforeId);
+
+// 2) (Optional) BBMP-clipped DEM PNG — replace corners with YOUR PNG's bounds
+// map.addSource('dem-bbmp-src', {
+//   type: 'image',
+//   url: '/data/dem/bbmp_dem_color.png',
+//   coordinates: [
+//     [UL_LON, UL_LAT], // upper-left
+//     [UR_LON, UR_LAT], // upper-right
+//     [LR_LON, LR_LAT], // lower-right
+//     [LL_LON, LL_LAT]  // lower-left
+//   ]
+// });
+map.addLayer({
+  id: 'dem-bbmp',
+  type: 'raster',
+  source: 'dem-bbmp-src',
+  paint: { 'raster-opacity': 0.75 }
+}, beforeId);
+
+// (optional) focus map on the NASADEM tile once
+map.fitBounds([[76.9998611, 13.9998611], [78.0001389, 15.0001389]], { padding: 20 });
+
+map.on('click', (e) => {
+  const z = map.queryTerrainElevation(e.lngLat, { exaggerated: false });
+  if (!Number.isFinite(z)) return;
+  new mapboxgl.Popup()
+    .setLngLat(e.lngLat)
+    .setHTML(`<div style="font:12px system-ui">Elevation: <b>${z.toFixed(1)} m</b></div>`)
+    .addTo(map);
+});
+
+
+
+// --- Mapbox DEM source (global elevation) ---
+map.addSource('mapbox-dem', {
+  type: 'raster-dem',
+  url: 'mapbox://mapbox.mapbox-terrain-dem-v1', // official Mapbox DEM tileset
+  tileSize: 512,
+  maxzoom: 14
+});
+
+// Turn on 3D terrain (set to 1 for realistic heights)
+map.setTerrain({ source: 'mapbox-dem', exaggeration: 1.4 });
+map.easeTo({ pitch: 60, bearing: -20, duration: 800 });
+
+
+// (optional) A subtle hillshade from the same DEM
+map.addLayer({
+  id: 'hillshade',
+  type: 'hillshade',
+  source: 'mapbox-dem',
+  layout: { visibility: 'visible' },
+  paint: { 'hillshade-exaggeration': 0.6 }
+}, /* place before */ undefined);
+
+// (optional) Pretty skybox for 3D view
+map.addLayer({
+  id: 'sky',
+  type: 'sky',
+  paint: {
+    'sky-type': 'atmosphere',
+    'sky-atmosphere-sun-intensity': 10
+  }
+});
+
+// Elevation popup ONLY if clicking empty map (not on wards/trees/schools)
+// --- Elevation popup ONLY when clicking empty map ---
+map.on('click', (e) => {
+  // If any feature click handler already handled this event, skip
+  if (e.originalEvent.handledByFeatureClick) return;
+
+  // Check if click hit any interactive layers
+  const hit = map.queryRenderedFeatures(e.point, {
+    layers: [
+      'layer1-point','layer2-point','layer3-point', // trees
+      'schools-unclustered','schools-clusters',    // schools
+      'bbmp-fill'                                  // wards
+    ]
+  });
+
+  if (hit.length > 0) return; // already handled
+
+  // Otherwise: show terrain elevation popup
+  const z = map.queryTerrainElevation(e.lngLat, { exaggerated: false });
+  if (!Number.isFinite(z)) return;
+
+  new mapboxgl.Popup()
+    .setLngLat(e.lngLat)
+    .setHTML(`<div style="font:12px system-ui">Elevation: <b>${z.toFixed(1)} m</b></div>`)
+    .addTo(map);
+});
+
+
+
+
+    });
+  </script>
+</body>
+</html>

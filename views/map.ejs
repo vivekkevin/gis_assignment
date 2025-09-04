@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Bengaluru Wards — Trees, Schools & Elevation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Mapbox -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.css" rel="stylesheet" />
+  <!-- Charts + geospatial helpers -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+  <!-- Read GeoTIFF in the browser -->
+  <script src="https://cdn.jsdelivr.net/npm/geotiff@2.0.7/dist/geotiff.browser.min.js"></script>
+  <link rel="stylesheet" href="/css/map.css" />
+</head>
+<body>
+
+  <!-- Demo Instructions Overlay -->
+  <div id="demo-overlay" class="demo-overlay">
+    <div class="demo-box">
+      <h2>🌟 Welcome to Bengaluru Ward Explorer</h2>
+      <p>Here’s how to use this map:</p>
+      <ul>
+        <li>🖱️ <strong>Click a ward</strong> → See schools, trees, and elevation.</li>
+        <li>📊 <strong>Use the right panel</strong> → Analytics and charts.</li>
+        <li>🗺️ <strong>Toggle legend/layers</strong> → Left controls & bottom legend.</li>
+        <li>⌨️ Shortcuts: <code>P</code> → Panel, <code>H</code> → Legend, <code>ESC</code> → Close popup.</li>
+      </ul>
+      <button id="start-demo">Continue ▶</button>
+    </div>
+  </div>
+
+  <!-- Loading indicator -->
+  <div id="loading" class="loading">
+    <div class="spinner"></div>
+    <span>Loading map data...</span>
+  </div>
+
+  <!-- Metrics panel -->
+  <div id="panel">
+    <button class="panel-toggle" onclick="togglePanel()" title="Toggle panel">◀</button>
+    <h3>📊 Ward Analytics</h3>
+    <div class="metric"><span>Ward</span><strong id="ward-name">—</strong></div>
+    <div class="metric"><span>🏫 Schools</span><strong id="ward-schools">—</strong></div>
+    <div class="metric"><span>🌳 Trees</span><strong id="ward-trees">—</strong></div>
+    <div class="metric"><span>📏 Avg elevation (m)</span><strong id="ward-elev">—</strong></div>
+    <canvas id="tree-pie" height="160"></canvas>
+    <small>💡 Click a ward polygon to view detailed analytics</small>
+  </div>
+
+  <!-- Legend -->
+  <div id="legend">
+    <button class="legend-toggle" onclick="toggleLegend()" title="Toggle legend">▼</button>
+    <h4>🗺️ Map Legend</h4>
+    
+    <div class="legend-item">
+      <div class="legend-symbol" style="background: #F54927;"></div>
+      <span><strong>Schools</strong> (unclustered)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-symbol" style="background: linear-gradient(45deg, #9ae6b4, #16a34a);"></div>
+      <span><strong>School clusters</strong> (25-250+)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-symbol" style="background: #3b82f6;"></div>
+      <span><strong>East Zone</strong> trees</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-symbol" style="background: #27F5E4;"></div>
+      <span><strong>South Zone</strong> trees</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-symbol" style="background: #10b981;"></div>
+      <span><strong>West Zone</strong> trees</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-line" style="background: #7c3aed;"></div>
+      <span><strong>BBMP Ward</strong> boundaries</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-square" style="background: linear-gradient(45deg, #fbbf24, #f59e0b); opacity: 0.3;"></div>
+      <span><strong>Selected ward</strong></span>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.js"></script>
+
+  <script>
+    // Pass token from server into JS global
+    window.MAPBOX_TOKEN = "<%= MAPBOX_TOKEN %>";
+  </script>
+  <script src="/js/map.js"></script>
+  
+</body>
+</html>

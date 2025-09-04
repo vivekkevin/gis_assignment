@@ -1,0 +1,142 @@
+
+html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+#map { position: absolute; inset: 0; }
+    
+/* Right info panel */
+#panel {
+    position: absolute; right: 12px; top: 12px; width: 320px; max-height: 75%;
+    background: #fff; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,.15);
+    padding: 16px; overflow: auto; font: 13px/1.35 system-ui, sans-serif; z-index: 10;
+    transition: transform 0.3s ease;
+}
+#panel.collapsed { transform: translateX(calc(100% + 12px)); }
+#panel h3 { margin: 0 0 12px; font-size: 16px; color: #111827; }
+.metric { 
+    display: flex; justify-content: space-between; margin: 8px 0; 
+    padding: 6px 0; border-bottom: 1px solid #f3f4f6;
+}
+.metric:last-of-type { border-bottom: none; }
+#panel small { color: #6b7280; font-style: italic; }
+.panel-toggle {
+    position: absolute; left: -32px; top: 16px; background: #fff;
+    border: none; border-radius: 6px 0 0 6px; padding: 8px 6px;
+    box-shadow: -2px 0 4px rgba(0,0,0,0.1); cursor: pointer;
+    font-size: 14px; color: #374151; transition: background 0.2s;
+}
+.panel-toggle:hover { background: #f9fafb; }
+
+/* Left controls */
+.ctrl {
+    padding: 12px; background: #fff; font: 12px/1.4 system-ui, sans-serif;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15); border-radius: 8px;
+    display: grid; gap: 8px; max-width: 260px; margin-bottom: 8px;
+}
+.ctrl h4 { margin: 0 0 8px; font-size: 14px; color: #111827; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+.ctrl label { 
+    display: flex; align-items: center; gap: 8px; padding: 4px 0;
+    cursor: pointer; transition: background 0.2s; border-radius: 4px;
+}
+.ctrl label:hover { background: #f9fafb; }
+.ctrl input[type="checkbox"] { margin: 0; }
+
+/* Legend */
+#legend {
+    position: absolute; bottom: 20px; left: 20px; 
+    background: #fff; border-radius: 8px; padding: 16px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15); font: 12px/1.4 system-ui, sans-serif;
+    min-width: 200px; z-index: 10; transition: transform 0.3s ease;
+}
+#legend.collapsed { transform: translateY(calc(100% + 20px)); }
+#legend h4 { margin: 0 0 12px; font-size: 14px; color: #111827; }
+.legend-item {
+    display: flex; align-items: center; gap: 10px; margin: 8px 0;
+    padding: 4px 0;
+}
+.legend-symbol {
+    width: 20px; height: 20px; border-radius: 50%; 
+    border: 2px solid #1f2937; flex-shrink: 0;
+}
+.legend-line {
+    width: 20px; height: 3px; border-radius: 2px; flex-shrink: 0;
+}
+.legend-square {
+    width: 20px; height: 20px; border-radius: 3px; 
+    border: 1px solid rgba(0,0,0,0.2); flex-shrink: 0;
+}
+.legend-toggle {
+    position: absolute; top: -32px; right: 0; background: #fff;
+    border: none; border-radius: 6px 6px 0 0; padding: 6px 8px;
+    box-shadow: 0 -2px 4px rgba(0,0,0,0.1); cursor: pointer;
+    font-size: 12px; color: #374151; transition: background 0.2s;
+}
+.legend-toggle:hover { background: #f9fafb; }
+
+/* Loading indicator */
+.loading {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: rgba(255,255,255,0.95); padding: 20px 24px; border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 1000;
+    display: flex; align-items: center; gap: 12px; font: 14px system-ui;
+}
+.spinner {
+    width: 20px; height: 20px; border: 2px solid #e5e7eb;
+    border-top: 2px solid #3b82f6; border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Responsive design */
+@media (max-width: 768px) {
+    #panel { width: 280px; right: 8px; top: 8px; }
+    .ctrl { max-width: 220px; }
+    #legend { left: 8px; bottom: 8px; min-width: 180px; }
+}
+
+    /* Demo overlay */
+.demo-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 2000;
+  color: #fff;
+  font-family: system-ui, sans-serif;
+}
+
+.demo-box {
+  background: #111827;
+  padding: 24px 28px;
+  border-radius: 12px;
+  max-width: 500px;
+  text-align: left;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+}
+
+.demo-box h2 {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.demo-box ul {
+  margin: 0 0 16px;
+  padding-left: 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.demo-box button {
+  background: #3b82f6;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  color: white;
+}
+
+.demo-box button:hover {
+  background: #2563eb;
+}
