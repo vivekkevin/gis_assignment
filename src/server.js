@@ -24,6 +24,10 @@ app.get('/', (req, res) => {
   res.redirect('/map');
 });
 
+app.get('/leaflet', (req, res) => {
+  res.render('leaflet');
+});
+
 // Map route
 app.get('/map', (req, res) => {
   res.render('map', { MAPBOX_TOKEN: process.env.MAPBOX_TOKEN });

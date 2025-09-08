@@ -9,6 +9,11 @@
   "dependencies": {
     "dotenv": "^17.2.2",
     "ejs": "^3.1.10",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "geoblaze": "^2.8.0",
+    "georaster": "^1.6.0",
+    "georaster-layer-for-leaflet": "^4.1.2",
+    "geotiff": "^0.4.1",
+    "leaflet": "^1.9.4"
   }
 }

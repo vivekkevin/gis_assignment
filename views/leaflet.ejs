@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DEM Raster Analysis - Enhanced</title>
+
+    <!-- Leaflet CDN -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+
+    <!-- Chart.js for analytics -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Turf.js for spatial analysis -->
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+
+    <style>
+/* === Basic, clean styles (no heavy effects) === */
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  color: #1f2937; /* neutral text */
+  background: #fff;
+  overflow: hidden; /* keep full-screen map */
+}
+
+#map {
+  height: 100vh;
+  width: 100%;
+  background: #f3f4f6; /* light neutral backdrop while tiles load */
+}
+
+/* --- Loading Overlay (simple) --- */
+#loading {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.5);
+  color: #fff; z-index: 10000;
+}
+.loading-content { text-align: center; font-size: 14px; }
+.loading-spinner {
+  width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.4);
+  border-top-color: #fff; border-radius: 50%; margin: 0 auto 10px;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* --- Progress Bar (simple) --- */
+.progress-container {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 3px; z-index: 1001;
+  background: #e5e7eb;
+}
+.progress-bar { height: 100%; width: 0%; background: #3b82f6; }
+
+/* --- Panels container --- */
+.control-panel {
+  position: absolute; top: 12px; right: 12px; z-index: 1000;
+  display: flex; flex-direction: column; gap: 8px; max-width: 280px;
+}
+
+/* --- Card-like groups (plain) --- */
+.control-group,
+.analysis-panel,
+.legend,
+.shortcuts-help,
+.status-indicator {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+
+/* --- Group headers --- */
+.control-header,
+.analysis-header,
+.legend-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px;
+  font-weight: 600; font-size: 14px;
+  background: #f9fafb;
+  color: #111827;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid #e5e7eb;
+}
+.control-toggle { font-size: 12px; }
+
+/* --- Group content --- */
+.control-content { padding: 12px; }
+.control-group.collapsed .control-content { display: none; }
+.control-option {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 4px;
+}
+.control-option input[type="radio"],
+.control-option input[type="checkbox"] { margin: 0; accent-color: #3b82f6; }
+.control-option label { flex: 1; font-size: 14px; color: #374151; }
+
+/* --- Analysis panel --- */
+.analysis-panel {
+  position: absolute; left: 12px; bottom: 12px; z-index: 1000;
+  min-width: 280px; max-width: 380px;
+}
+.analysis-content { padding: 12px; }
+.analysis-panel.collapsed .analysis-content { display: none; }
+
+.stat-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;
+}
+.stat-item {
+  text-align: center; padding: 10px;
+  border: 1px solid #e5e7eb; border-radius: 6px; background: #fbfbfb;
+}
+.stat-value { display: block; font-size: 18px; font-weight: 700; color: #1f2937; }
+.stat-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
+
+.chart-container { height: 180px; }
+
+/* --- Legend (plain) --- */
+.legend {
+  position: absolute; right: 12px; bottom: 12px; z-index: 1000;
+  min-width: 200px;
+}
+.legend-items { padding: 12px; }
+.legend.collapsed .legend-items { display: none; }
+.legend-item { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; color: #374151; }
+.legend-color { width: 18px; height: 12px; border: 1px solid #e5e7eb; border-radius: 2px; }
+
+/* Optional: simple vertical gradient bar kept minimal */
+.legend-flex { display: flex; align-items: stretch; gap: 10px; }
+.legend-gradient {
+  width: 24px; height: 180px; border: 1px solid #e5e7eb; border-radius: 3px;
+  background: linear-gradient(to top, #2563eb, #ef4444);
+}
+.legend-ticks { position: relative; flex: 1; height: 180px; }
+.legend-tick {
+  position: absolute; left: 0; transform: translateY(-50%);
+  font-size: 11px; color: #374151; white-space: nowrap;
+}
+.legend-tick::before {
+  content: ''; display: inline-block; width: 8px; border-top: 1px solid #9ca3af;
+  margin: 0 6px 2px 0; vertical-align: middle;
+}
+
+/* --- Status indicator (plain) --- */
+.status-indicator {
+  position: absolute; top: 12px; right: 12px; z-index: 1000;
+  padding: 8px 10px; font-size: 12px; font-weight: 500; color: #111827;
+}
+.status-indicator.success { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+.status-indicator.error   { background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }
+
+/* --- Shortcuts help (simple) --- */
+.shortcuts-help {
+  position: absolute; top: 64px; right: 12px; z-index: 1000;
+  padding: 10px; font-size: 12px; max-width: 220px; color: #111827;
+  display: none;
+}
+.shortcuts-help.visible { display: block; }
+.shortcut-item { display: flex; justify-content: space-between; margin: 4px 0; }
+.shortcut-key {
+  background: #f3f4f6; padding: 2px 6px; border-radius: 3px; font-weight: 600; font-size: 11px;
+}
+
+/* Style the popup text */
+.leaflet-popup-content {
+  margin: 8px 12px;
+  background-color: #222;        /* default font color */
+  font-size: 14px;    /* optional */
+  font-weight: 500;   /* optional */
+}
+
+/* Style the popup wrapper (only for custom popups) */
+.custom-popup .leaflet-popup-content-wrapper {
+  border-radius: 6px;
+  background-color: #0055aa;     /* font color when custom-popup is applied */
+}
+
+
+/* --- Responsive (minimal) --- */
+@media (max-width: 768px) {
+  .control-panel { top: 8px; left: 8px; max-width: 240px; }
+  .analysis-panel { left: 8px; bottom: 8px; min-width: 240px; max-width: 300px; }
+  .legend { right: 8px; bottom: 8px; min-width: 180px; }
+  .legend-gradient, .legend-ticks { height: 150px; }
+  .stat-grid { grid-template-columns: 1fr; }
+  .chart-container { height: 140px; }
+}
+
+    </style>
+  </head>
+  <body>
+    <!-- Loading Overlay -->
+    <div id="loading">
+      <div class="loading-content">
+        <div class="loading-spinner"></div>
+        <div>Loading DEM Raster Analysis...</div>
+        <div style="font-size: 14px; margin-top: 8px; opacity: 0.8;">
+          <span id="loading-text">Initializing...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress Bar -->
+    <div class="progress-container">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- Status Indicator -->
+    <div class="status-indicator" id="status">Initializing...</div>
+
+    <!-- Keyboard Shortcuts Help -->
+    <div class="shortcuts-help" id="shortcuts-help">
+      <div style="font-weight: bold; margin-bottom: 8px;">Keyboard Shortcuts</div>
+      <div class="shortcut-item">
+        <span>Toggle Legend</span>
+        <span class="shortcut-key">H</span>
+      </div>
+      <div class="shortcut-item">
+        <span>Reset View</span>
+        <span class="shortcut-key">R</span>
+      </div>
+      <div class="shortcut-item">
+        <span>Close Popups</span>
+        <span class="shortcut-key">ESC</span>
+      </div>
+      <div class="shortcut-item">
+        <span>Analysis Modes</span>
+        <span class="shortcut-key">1-4</span>
+      </div>
+      <div class="shortcut-item">
+        <span>Show Help</span>
+        <span class="shortcut-key">?</span>
+      </div>
+    </div>
+
+    <!-- Control Panel -->
+    <div class="control-panel">
+      <!-- Analysis Mode Controls -->
+      <div class="control-group" id="analysis-controls">
+        <div class="control-header" onclick="toggleControlGroup('analysis-controls')">
+          <span>Analysis Modes</span>
+          <span class="control-toggle">▼</span>
+        </div>
+        <div class="control-content">
+          <div class="control-option">
+            <input type="radio" id="elevation" name="analysis" value="elevation" checked>
+            <label for="elevation">Elevation (Blue-Red)</label>
+          </div>
+          <div class="control-option">
+            <input type="radio" id="grayscale" name="analysis" value="grayscale">
+            <label for="grayscale">Grayscale</label>
+          </div>
+          <div class="control-option">
+            <input type="radio" id="terrain" name="analysis" value="terrain">
+            <label for="terrain">Terrain Classification</label>
+          </div>
+          <div class="control-option">
+            <input type="radio" id="slope" name="analysis" value="slope">
+            <label for="slope">Slope Analysis</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Display Options -->
+      <div class="control-group" id="display-controls">
+        <div class="control-header" onclick="toggleControlGroup('display-controls')">
+          <span>Display Options</span>
+          <span class="control-toggle">▼</span>
+        </div>
+        <div class="control-content">
+          <div class="control-option">
+            <input type="checkbox" id="show-contours" checked>
+            <label for="show-contours">Show Contours</label>
+          </div>
+          <div class="control-option">
+            <input type="checkbox" id="show-markers" checked>
+            <label for="show-markers">Show Click Markers</label>
+          </div>
+          <div class="control-option">
+            <input type="checkbox" id="enhanced-contrast">
+            <label for="enhanced-contrast">Enhanced Contrast</label>
+          </div>
+          <div class="control-option">
+            <input type="range" id="opacity-slider" min="0.1" max="1" step="0.1" value="0.7">
+            <label for="opacity-slider">Layer Opacity</label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Analysis Panel -->
+    <div class="analysis-panel" id="analysis-panel">
+      <div class="analysis-header" onclick="toggleAnalysisPanel()">
+        <span>Click Analysis</span>
+        <span class="control-toggle" id="analysis-toggle">▼</span>
+      </div>
+      <div class="analysis-content">
+        <div class="stat-grid">
+          <div class="stat-item">
+            <span class="stat-value" id="current-elevation">—</span>
+            <div class="stat-label">Elevation (m)</div>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value" id="current-slope">—</span>
+            <div class="stat-label">Slope Class</div>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value" id="current-terrain">—</span>
+            <div class="stat-label">Terrain Type</div>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value" id="click-count">0</span>
+            <div class="stat-label">Points Analyzed</div>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="elevation-chart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="legend" id="legend">
+      <div class="legend-header" onclick="toggleLegend()">
+        <span>Legend</span>
+        <span class="control-toggle" id="legend-toggle">▼</span>
+      </div>
+      <div class="legend-items" id="legend-content">
+        <!-- Dynamic legend content will be inserted here -->
+      </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/georaster"></script>
+    <script src="https://unpkg.com/georaster-layer-for-leaflet/dist/georaster-layer-for-leaflet.min.js"></script>
+    <script src="https://unpkg.com/geoblaze"></script>
+
+    <script>
+      // === Enhanced Configuration ===
+      const CONFIG = {
+        // Elevation scale configuration
+        elevationScale: {
+          min: 759,
+          max: 969,
+          ticks: [759, 800, 850, 900, 950, 969]
+        },
+        
+        // Demo mode settings
+        demo: {
+          enabled: false,
+          centerLat: 13.0671,
+          centerLng: 77.6091,
+          zoom: 7
+        },
+        
+        // Performance settings
+        performance: {
+          canvasSize: 512,
+          memoryThreshold: 50 * 1024 * 1024, // 50MB
+          batchSize: 50,
+          monitorInterval: 30000 // 30 seconds
+        },
+        
+        // UI settings
+        ui: {
+          welcomeDelay: 2000,
+          welcomeAutoClose: 8000,
+          errorAutoClose: 5000,
+          statusAutoHide: 3000,
+          animationDuration: 300
+        }
+      };
+
+      // === Global State Management ===
+      const STATE = {
+        map: null,
+        currentLayer: null,
+        georasterData: null,
+        demoMode: false,
+        currentPopup: null,
+        elevationChart: null,
+        clickHistory: [],
+        loadingSteps: 0,
+        totalSteps: 4, // DEM + demo + chart + initialization
+        isInitialized: false
+      };
+
+      // === Performance Monitoring ===
+      const PERFORMANCE = {
+        startTime: performance.now(),
+        
+        updateLoadingProgress() {
+          STATE.loadingSteps++;
+          const progress = Math.round((STATE.loadingSteps / STATE.totalSteps) * 100);
+          
+          const progressBar = document.getElementById('progress-bar');
+          const loadingText = document.getElementById('loading-text');
+          const status = document.getElementById('status');
+          
+          if (progressBar) progressBar.style.width = `${progress}%`;
+          if (loadingText) loadingText.textContent = `${progress}% Complete`;
+          if (status) status.textContent = `Loading... ${progress}%`;
+          
+            if (STATE.loadingSteps >= STATE.totalSteps) {
+            setTimeout(() => {
+                const loading = document.getElementById('loading');
+                if (loading) {
+                loading.style.display = 'none';
+                // ⬇️ ensure Leaflet recalculates the map size once the overlay is gone
+                if (STATE.map) STATE.map.invalidateSize();
+                }
+
+                const status = document.getElementById('status');
+                if (status) {
+                status.textContent = STATE.demoMode ? 'Demo Mode Active' : 'Ready';
+                status.className = 'status-indicator success';
+                setTimeout(() => { status.style.display = 'none'; }, CONFIG.ui.statusAutoHide);
+                }
+            }, 500);
+            }
+        },
+        
+        logTiming(operation, duration) {
+          console.log(`${operation} completed in ${duration.toFixed(2)}ms`);
+          if (duration > 1000) {
+            console.warn(`Slow operation detected: ${operation}`);
+          }
+        },
+        
+        monitorMemory() {
+          if (!('memory' in performance)) return;
+          
+          setInterval(() => {
+            const memory = performance.memory;
+            if (memory.usedJSHeapSize > CONFIG.performance.memoryThreshold) {
+              console.warn('High memory usage:', 
+                Math.round(memory.usedJSHeapSize / 1024 / 1024) + 'MB');
+            }
+          }, CONFIG.performance.monitorInterval);
+        }
+      };
+
+      // === Enhanced Popup Management ===
+      const POPUP_MANAGER = {
+        show(latlng, content, options = {}) {
+          this.close();
+          
+          const popupOptions = {
+            maxWidth: options.maxWidth || 320,
+            minWidth: options.minWidth || 240,
+            closeButton: options.closeButton !== false,
+            autoClose: options.autoClose !== false,
+            keepInView: true,
+            className: options.className || 'custom-popup',
+            offset: options.offset || [0, -10],
+            ...options
+          };
+          
+          STATE.currentPopup = L.popup(popupOptions)
+            .setLatLng(latlng)
+            .setContent(content)
+            .openOn(STATE.map);
+          
+          return STATE.currentPopup;
+        },
+        
+        close() {
+          if (STATE.currentPopup && STATE.map.hasLayer(STATE.currentPopup)) {
+            STATE.map.removeLayer(STATE.currentPopup);
+            STATE.currentPopup = null;
+          }
+        },
+        
+        showError(error, context = 'Operation') {
+          console.error(`${context} error:`, error);
+          
+          const content = `
+            <div style="color: #dc2626; font: 12px system-ui; padding: 12px; text-align: center;">
+              <strong>⚠️ ${context} Failed</strong><br>
+              <small style="color: #6b7280; margin-top: 4px; display: block;">
+                ${error.message || 'Unknown error occurred'}
+              </small>
+            </div>
+          `;
+          
+          const errorPopup = this.show(STATE.map.getCenter(), content, {
+            className: 'error-popup',
+            autoClose: false,
+            maxWidth: 280
+          });
+          
+          setTimeout(() => {
+            if (errorPopup && STATE.map.hasLayer(errorPopup)) {
+              STATE.map.removeLayer(errorPopup);
+            }
+          }, CONFIG.ui.errorAutoClose);
+        },
+        
+        showWelcome() {
+          setTimeout(() => {
+            if (!STATE.isInitialized) return;
+            
+            const content = `
+              <div style="font: 13px/1.4 system-ui, sans-serif; text-align: center; padding: 16px; max-width: 320px;">
+                <h3 style="margin: 0 0 12px; color: white; font-size: 16px;">🏔️ Enhanced DEM Analysis</h3>
+                <p style="margin: 0 0 12px; color: rgba(255,255,255,0.9); font-size: 12px; line-height: 1.4;">
+                  Interactive elevation and terrain analysis with advanced features
+                </p>
+                <div style="font-size: 11px; color: rgba(255,255,255,0.8); line-height: 1.4;">
+                  💡 Click anywhere for detailed analysis<br>
+                  🎨 Switch modes with radio buttons or keys 1-4<br>
+                  ⌨️ Press '?' for keyboard shortcuts<br>
+                  📊 View statistics in the analysis panel
+                </div>
+              </div>
+            `;
+            
+            const welcomePopup = this.show([CONFIG.demo.centerLat, CONFIG.demo.centerLng], content, {
+              maxWidth: 350,
+              className: 'welcome-popup',
+              closeButton: true,
+              autoClose: false
+            });
+            
+            setTimeout(() => {
+              if (welcomePopup && STATE.map.hasLayer(welcomePopup)) {
+                STATE.map.removeLayer(welcomePopup);
+              }
+            }, CONFIG.ui.welcomeAutoClose);
+          }, CONFIG.ui.welcomeDelay);
+        }
+      };
+
+      // === Enhanced Data Management ===
+      const DATA_MANAGER = {
+        generateDemoElevation(lat, lng) {
+          const centerLat = CONFIG.demo.centerLat;
+          const centerLng = CONFIG.demo.centerLng;
+          const distanceFromCenter = Math.sqrt(
+            Math.pow(lat - centerLat, 2) + Math.pow(lng - centerLng, 2)
+          );
+          
+          const baseElevation = (CONFIG.elevationScale.min + CONFIG.elevationScale.max) / 2;
+          const variation = Math.sin(lat * 15) * Math.cos(lng * 15) * 80;
+          const distanceEffect = Math.max(0, 50 - (distanceFromCenter * 1000));
+          
+          return Math.max(CONFIG.elevationScale.min, 
+            Math.min(CONFIG.elevationScale.max, baseElevation + variation + distanceEffect));
+        },
+        
+        getTerrainType(elevation) {
+          if (elevation < 800) return "Lowland";
+          if (elevation < 850) return "Valleys";
+          if (elevation < 950) return "Highlands";
+          return "Peaks";
+        },
+        
+        getSlopeClass(elevation) {
+          const steepness = Math.abs(Math.sin(elevation * 0.1) * Math.cos(elevation * 0.05));
+          if (steepness >= 0.8) return "Very Steep";
+          if (steepness >= 0.5) return "Steep";
+          if (steepness >= 0.2) return "Moderate";
+          return "Gentle";
+        },
+        
+        addClickData(lat, lng, elevation) {
+          STATE.clickHistory.push({
+            lat,
+            lng,
+            elevation,
+            terrain: this.getTerrainType(elevation),
+            slope: this.getSlopeClass(elevation),
+            timestamp: Date.now()
+          });
+          
+          // Keep only last 50 points for performance
+          if (STATE.clickHistory.length > 50) {
+            STATE.clickHistory = STATE.clickHistory.slice(-50);
+          }
+          
+          this.updateAnalysisPanel();
+          this.updateChart();
+        },
+        
+        updateAnalysisPanel() {
+          const latest = STATE.clickHistory[STATE.clickHistory.length - 1];
+          if (!latest) return;
+          
+          document.getElementById('current-elevation').textContent = Math.round(latest.elevation);
+          document.getElementById('current-slope').textContent = latest.slope;
+          document.getElementById('current-terrain').textContent = latest.terrain;
+          document.getElementById('click-count').textContent = STATE.clickHistory.length;
+        },
+        
+        updateChart() {
+          if (!STATE.elevationChart) return;
+          
+          const recentData = STATE.clickHistory.slice(-20); // Last 20 points
+          const labels = recentData.map((_, i) => `Point ${i + 1}`);
+          const elevations = recentData.map(d => d.elevation);
+          
+          STATE.elevationChart.data.labels = labels;
+          STATE.elevationChart.data.datasets[0].data = elevations;
+          STATE.elevationChart.update('none'); // No animation for performance
+        }
+      };
+
+      // === Enhanced Color Functions ===
+      const COLOR_FUNCTIONS = {
+        elevation(value) {
+          let v = Array.isArray(value) ? value[0] : value;
+          if (v == null || Number.isNaN(v)) return null;
+
+          const { min, max } = CONFIG.elevationScale;
+          if (v < min || v > max) return "rgba(0,0,0,0)";
+
+          const normalized = (v - min) / (max - min);
+          const hue = 210 + (0 - 210) * normalized; // Blue to Red
+          return `hsl(${hue}, 90%, 50%)`;
+        },
+
+        grayscale(value) {
+          let v = Array.isArray(value) ? value[0] : value;
+          if (v == null || Number.isNaN(v)) return null;
+
+          const { min, max } = CONFIG.elevationScale;
+          if (v < min || v > max) return "rgba(0,0,0,0)";
+
+          const normalized = (v - min) / (max - min);
+          const gray = Math.floor(normalized * 255);
+          return `rgb(${gray}, ${gray}, ${gray})`;
+        },
+
+        terrain(value) {
+          let v = Array.isArray(value) ? value[0] : value;
+          if (v == null || Number.isNaN(v)) return null;
+
+          if (v < CONFIG.elevationScale.min) return "rgba(0,0,0,0)";
+          if (v < 800) return "rgb(101, 67, 33)"; // Brown - Lowland
+          if (v < 850) return "rgb(34, 139, 34)"; // Green - Valleys
+          if (v < 950) return "rgb(184, 134, 11)"; // Gold - Highlands
+          return "rgb(255, 250, 250)"; // Snow white - Peaks
+        },
+
+        slope(value) {
+          let v = Array.isArray(value) ? value[0] : value;
+          if (v == null || Number.isNaN(v)) return null;
+
+          const { min, max } = CONFIG.elevationScale;
+          if (v < min || v > max) return "rgba(0,0,0,0)";
+
+          const steepness = Math.abs(Math.sin(v * 0.1) * Math.cos(v * 0.05));
+          if (steepness < 0.2) return "rgb(50, 205, 50)"; // Light green
+          if (steepness < 0.5) return "rgb(255, 215, 0)"; // Gold
+          if (steepness < 0.8) return "rgb(255, 140, 0)"; // Orange
+          return "rgb(220, 20, 60)"; // Crimson
+        }
+      };
+
+      // === Enhanced Legend Management ===
+      const LEGEND_MANAGER = {
+        update(mode) {
+          const content = document.getElementById('legend-content');
+          if (!content) return;
+          
+          content.innerHTML = '';
+          
+          switch(mode) {
+            case 'elevation':
+              this.renderGradientLegend(content);
+              break;
+            case 'grayscale':
+              this.renderGrayscaleLegend(content);
+              break;
+            case 'terrain':
+              this.renderTerrainLegend(content);
+              break;
+            case 'slope':
+              this.renderSlopeLegend(content);
+              break;
+          }
+        },
+        
+        renderGradientLegend(container) {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'legend-flex';
+          
+          const gradientBar = document.createElement('div');
+          gradientBar.className = 'legend-gradient';
+          gradientBar.style.background = 'linear-gradient(to top, hsl(210, 90%, 50%), hsl(0, 90%, 50%))';
+          
+          const ticksContainer = document.createElement('div');
+          ticksContainer.className = 'legend-ticks';
+          
+          const range = CONFIG.elevationScale.max - CONFIG.elevationScale.min;
+          CONFIG.elevationScale.ticks.forEach(value => {
+            const pct = ((value - CONFIG.elevationScale.min) / range) * 100;
+            const tick = document.createElement('div');
+            tick.className = 'legend-tick';
+            tick.style.top = `${100 - pct}%`;
+            tick.textContent = `${value} m`;
+            ticksContainer.appendChild(tick);
+          });
+          
+          wrapper.appendChild(gradientBar);
+          wrapper.appendChild(ticksContainer);
+          container.appendChild(wrapper);
+        },
+        
+        renderGrayscaleLegend(container) {
+          const items = [
+            { color: 'rgb(0,0,0)', label: '759m (Dark)' },
+            { color: 'rgb(85,85,85)', label: '850m (Mid)' },
+            { color: 'rgb(170,170,170)', label: '925m (Light)' },
+            { color: 'rgb(255,255,255)', label: '969m (White)' }
+          ];
+          this.renderItemLegend(container, items);
+        },
+        
+        renderTerrainLegend(container) {
+          const items = [
+            { color: 'rgb(101, 67, 33)', label: 'Lowland (759-800m)' },
+            { color: 'rgb(34, 139, 34)', label: 'Valleys (800-850m)' },
+            { color: 'rgb(184, 134, 11)', label: 'Highlands (850-950m)' },
+            { color: 'rgb(255, 250, 250)', label: 'Peaks (950-969m)' }
+          ];
+          this.renderItemLegend(container, items);
+        },
+        
+        renderSlopeLegend(container) {
+          const items = [
+            { color: 'rgb(50, 205, 50)', label: 'Gentle (0-10°)' },
+            { color: 'rgb(255, 215, 0)', label: 'Moderate (10-20°)' },
+            { color: 'rgb(255, 140, 0)', label: 'Steep (20-30°)' },
+            { color: 'rgb(220, 20, 60)', label: 'Very Steep (>30°)' }
+          ];
+          this.renderItemLegend(container, items);
+        },
+        
+        renderItemLegend(container, items) {
+          items.forEach(item => {
+            const legendItem = document.createElement('div');
+            legendItem.className = 'legend-item';
+            legendItem.innerHTML = `
+              <div class="legend-color" style="background: ${item.color}"></div>
+              <span>${item.label}</span>
+            `;
+            container.appendChild(legendItem);
+          });
+        }
+      };
+
+      // === Enhanced Layer Management ===
+      const LAYER_MANAGER = {
+        createDemoLayer(analysisMode) {
+          const startTime = performance.now();
+          
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          const width = canvas.width = CONFIG.performance.canvasSize;
+          const height = canvas.height = CONFIG.performance.canvasSize;
+          
+          // Generate raster data with improved performance
+          const imageData = ctx.createImageData(width, height);
+          const data = imageData.data;
+          
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              const lat = 28.0 + (y / height) * 1.0;
+              const lng = 83.5 + (x / width) * 1.5;
+              
+              const elevation = DATA_MANAGER.generateDemoElevation(lat, lng);
+              const color = COLOR_FUNCTIONS[analysisMode]([elevation]);
+              
+              const index = (y * width + x) * 4;
+              
+              if (color && color !== "rgba(0,0,0,0)") {
+                const rgb = this.parseColor(color);
+                data[index] = rgb.r;     // Red
+                data[index + 1] = rgb.g; // Green
+                data[index + 2] = rgb.b; // Blue
+                data[index + 3] = 255;   // Alpha
+              } else {
+                data[index + 3] = 0; // Transparent
+              }
+            }
+          }
+          
+          ctx.putImageData(imageData, 0, 0);
+          
+          const bounds = [[28.0, 83.5], [29.0, 85.0]];
+          const imageUrl = canvas.toDataURL();
+          
+          this.removeCurrentLayer();
+          
+          STATE.currentLayer = L.imageOverlay(imageUrl, bounds, {
+            opacity: parseFloat(document.getElementById('opacity-slider').value)
+          });
+          STATE.currentLayer.addTo(STATE.map);
+          STATE.map.invalidateSize();
+          
+          STATE.map.fitBounds(bounds, { padding: [10, 10], animate: false });
+          
+          const duration = performance.now() - startTime;
+          PERFORMANCE.logTiming('Demo layer creation', duration);
+        },
+        
+        updateLayer(analysisMode) {
+          const startTime = performance.now();
+          console.log('Updating layer with mode:', analysisMode);
+          
+          if (STATE.demoMode) {
+            this.createDemoLayer(analysisMode);
+          } else if (STATE.georasterData) {
+            this.removeCurrentLayer();
+            
+            STATE.currentLayer = new GeoRasterLayer({
+              georaster: STATE.georasterData,
+              opacity: parseFloat(document.getElementById('opacity-slider').value),
+              pixelValuesToColorFn: COLOR_FUNCTIONS[analysisMode],
+              resolution: 256,
+            });
+            STATE.currentLayer.addTo(STATE.map);
+            STATE.map.invalidateSize();
+          }
+          
+          LEGEND_MANAGER.update(analysisMode);
+          
+          const duration = performance.now() - startTime;
+          PERFORMANCE.logTiming('Layer update', duration);
+        },
+        
+        removeCurrentLayer() {
+          if (STATE.currentLayer) {
+            STATE.map.removeLayer(STATE.currentLayer);
+            STATE.currentLayer = null;
+          }
+        },
+        
+        parseColor(colorString) {
+          if (colorString.startsWith('hsl')) {
+            return this.hslToRgb(colorString);
+          } else if (colorString.startsWith('rgb')) {
+            return this.rgbToRgb(colorString);
+          }
+          return { r: 0, g: 0, b: 0 };
+        },
+        
+        hslToRgb(hslString) {
+          const match = hslString.match(/hsl\(([^)]+)\)/);
+          if (!match) return { r: 0, g: 0, b: 0 };
+          
+          const [h, s, l] = match[1].split(',').map(x => parseFloat(x.trim().replace('%', '')));
+          const hNorm = h / 360;
+          const sNorm = s / 100;
+          const lNorm = l / 100;
+          
+          const c = (1 - Math.abs(2 * lNorm - 1)) * sNorm;
+          const x = c * (1 - Math.abs((hNorm * 6) % 2 - 1));
+          const m = lNorm - c / 2;
+          
+          let r, g, b;
+          if (hNorm >= 0 && hNorm < 1/6) { r = c; g = x; b = 0; }
+          else if (hNorm >= 1/6 && hNorm < 2/6) { r = x; g = c; b = 0; }
+          else if (hNorm >= 2/6 && hNorm < 3/6) { r = 0; g = c; b = x; }
+          else if (hNorm >= 3/6 && hNorm < 4/6) { r = 0; g = x; b = c; }
+          else if (hNorm >= 4/6 && hNorm < 5/6) { r = x; g = 0; b = c; }
+          else { r = c; g = 0; b = x; }
+          
+          return {
+            r: Math.round((r + m) * 255),
+            g: Math.round((g + m) * 255),
+            b: Math.round((b + m) * 255)
+          };
+        },
+        
+        rgbToRgb(rgbString) {
+          const match = rgbString.match(/rgb\(([^)]+)\)/);
+          if (!match) return { r: 0, g: 0, b: 0 };
+          
+          const [r, g, b] = match[1].split(',').map(x => parseInt(x.trim()));
+          return { r, g, b };
+        }
+      };
+
+      // === Enhanced Event Handlers ===
+      const EVENT_HANDLERS = {
+        setupKeyboardShortcuts() {
+          document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            
+            switch(e.key.toLowerCase()) {
+              case 'escape':
+                POPUP_MANAGER.close();
+                break;
+              case 'h':
+                toggleLegend();
+                break;
+              case 'r':
+                STATE.map.setView([CONFIG.demo.centerLat, CONFIG.demo.centerLng], CONFIG.demo.zoom);
+                break;
+              case 'p':
+                toggleAnalysisPanel();
+                break;
+              case '?':
+                this.toggleShortcutsHelp();
+                break;
+              case '1':
+              case '2':
+              case '3':
+              case '4':
+                const modes = ['elevation', 'grayscale', 'terrain', 'slope'];
+                const modeIndex = parseInt(e.key) - 1;
+                if (modes[modeIndex]) {
+                  document.getElementById(modes[modeIndex]).checked = true;
+                  LAYER_MANAGER.updateLayer(modes[modeIndex]);
+                }
+                break;
+            }
+          });
+        },
+        
+        setupMapEvents() {
+          STATE.map.on('click', this.handleMapClick);
+          STATE.map.on('zoomend', this.handleZoomChange);
+          STATE.map.on('moveend', this.handleMoveEnd);
+        },
+        
+        handleMapClick(e) {
+          const lat = e.latlng.lat;
+          const lng = e.latlng.lng;
+          
+          // Remove existing markers if option is enabled
+          if (document.getElementById('show-markers').checked) {
+            STATE.map.eachLayer(function (layer) {
+              if (layer instanceof L.Marker) {
+                STATE.map.removeLayer(layer);
+              }
+            });
+          }
+
+          let elevation;
+          
+          if (STATE.demoMode) {
+            elevation = DATA_MANAGER.generateDemoElevation(lat, lng);
+          } else if (STATE.georasterData) {
+            try {
+              elevation = geoblaze.identify(STATE.georasterData, [lng, lat]);
+              if (Array.isArray(elevation)) elevation = elevation[0];
+            } catch (error) {
+              POPUP_MANAGER.showError(error, 'Elevation query');
+              return;
+            }
+          }
+
+          if (elevation === undefined || elevation === null || isNaN(elevation)) {
+            const content = `
+              <div style="font: 13px system-ui; padding: 12px; text-align: center; color: #6b7280;">
+                <strong>No Data Available</strong><br>
+                <small>Coordinates: ${lat.toFixed(4)}, ${lng.toFixed(4)}</small>
+              </div>
+            `;
+            POPUP_MANAGER.show([lat, lng], content);
+            return;
+          }
+
+          // Add to history and update analytics
+          DATA_MANAGER.addClickData(lat, lng, elevation);
+          
+          // Create enhanced popup
+          const terrainType = DATA_MANAGER.getTerrainType(elevation);
+          const slopeClass = DATA_MANAGER.getSlopeClass(elevation);
+          const currentMode = document.querySelector('input[name="analysis"]:checked').value;
+          
+          const content = `
+            <div style="font: 13px/1.5 system-ui, sans-serif; padding: 16px; min-width: 260px;">
+              <div style="font-weight: 600; font-size: 15px; margin-bottom: 12px; color: #fff; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                🎯 Location Analysis
+                <span style="font-size: 11px; background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-weight: 400; color: #000;">#${STATE.clickHistory.length}</span>
+              </div>
+              <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                <tr>
+                  <td style="padding: 6px 12px 6px 0; color: #6b7280; font-weight: 500;">Coordinates</td>
+                  <td style="padding: 6px 0; font-weight: 600; text-align: right; font-family: monospace; color: #fff;">${lat.toFixed(4)}, ${lng.toFixed(4)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 12px 6px 0; color: #6b7280; font-weight: 500;">Elevation</td>
+                  <td style="padding: 6px 0; font-weight: 600; text-align: right; color: #fff;">${Math.round(elevation)} m</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 12px 6px 0; color: #6b7280; font-weight: 500;">Terrain Type</td>
+                  <td style="padding: 6px 0; font-weight: 600; text-align: right; color: #fff;">${terrainType}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 12px 6px 0; color: #6b7280; font-weight: 500;">Slope Class</td>
+                  <td style="padding: 6px 0; font-weight: 600; text-align: right; color: #fff;">${slopeClass}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 12px 6px 0; color: #6b7280; font-weight: 500;">Analysis Mode</td>
+                  <td style="padding: 6px 0; font-weight: 600; text-align: right; text-transform: capitalize; color: #fff;">${currentMode}</td>
+                </tr>
+              </table>
+              ${STATE.demoMode ? `
+                <div style="margin-top: 12px; padding: 8px; background: linear-gradient(135deg, #f3f4f6, #e5e7eb); border-radius: 6px; font-size: 11px; color: #6b7280; text-align: center;">
+                  📊 Demo Mode - Simulated Data
+                </div>
+              ` : ''}
+            </div>
+          `;
+
+          // Add marker if enabled
+          if (document.getElementById('show-markers').checked) {
+            const marker = L.marker([lat, lng], {
+              icon: L.divIcon({
+                className: 'custom-marker',
+                html: '<div style="width: 14px; height: 14px; background: #ef4444; border: 3px solid white; border-radius: 50%; box-shadow: 0 3px 8px rgba(0,0,0,0.3);"></div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+              })
+            }).addTo(STATE.map);
+          }
+
+          POPUP_MANAGER.show([lat, lng], content, {
+            maxWidth: 300,
+            offset: [0, -15]
+          });
+        },
+        
+        handleZoomChange() {
+          console.log('Zoom changed to:', STATE.map.getZoom());
+        },
+        
+        handleMoveEnd() {
+        const c = STATE.map.getCenter().wrap(); // normalize to [-180,180]
+        console.log('Map moved to:', c.lat.toFixed(4), c.lng.toFixed(4));
+        },
+
+        toggleShortcutsHelp() {
+          const help = document.getElementById('shortcuts-help');
+          help.classList.toggle('visible');
+        }
+      };
+
+      // === UI Control Functions ===
+      function toggleControlGroup(groupId) {
+        const group = document.getElementById(groupId);
+        const toggle = group.querySelector('.control-toggle');
+        
+        group.classList.toggle('collapsed');
+        toggle.textContent = group.classList.contains('collapsed') ? '▶' : '▼';
+      }
+
+      function toggleAnalysisPanel() {
+        const panel = document.getElementById('analysis-panel');
+        const toggle = document.getElementById('analysis-toggle');
+        
+        panel.classList.toggle('collapsed');
+        toggle.textContent = panel.classList.contains('collapsed') ? '▶' : '▼';
+      }
+
+      function toggleLegend() {
+        const legend = document.getElementById('legend');
+        const toggle = document.getElementById('legend-toggle');
+        
+        legend.classList.toggle('collapsed');
+        toggle.textContent = legend.classList.contains('collapsed') ? '▶' : '▼';
+      }
+
+      // === Initialization Functions ===
+      function initializeChart() {
+        const ctx = document.getElementById('elevation-chart').getContext('2d');
+        
+        STATE.elevationChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: [],
+            datasets: [{
+              label: 'Elevation (m)',
+              data: [],
+              borderColor: '#667eea',
+              backgroundColor: 'rgba(102, 126, 234, 0.1)',
+              borderWidth: 2,
+              fill: true,
+              tension: 0.4,
+              pointBackgroundColor: '#667eea',
+              pointBorderColor: '#ffffff',
+              pointBorderWidth: 2,
+              pointRadius: 4
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: false
+              }
+            },
+            scales: {
+              x: {
+                display: false
+              },
+              y: {
+                beginAtZero: false,
+                grid: {
+                  color: 'rgba(0,0,0,0.1)'
+                },
+                ticks: {
+                  color: '#6b7280',
+                  font: {
+                    size: 10
+                  }
+                }
+              }
+            },
+            elements: {
+              point: {
+                hoverRadius: 6
+              }
+            }
+          }
+        });
+        
+        PERFORMANCE.updateLoadingProgress();
+      }
+
+      function initializeDemo() {
+        STATE.demoMode = true;
+        document.getElementById('status').textContent = 'Demo Mode Active';
+        document.getElementById('status').className = 'status-indicator';
+        
+        LAYER_MANAGER.createDemoLayer('elevation');
+        LEGEND_MANAGER.update('elevation');
+        
+        PERFORMANCE.updateLoadingProgress();
+        console.log('Demo mode initialized');
+      }
+
+      function setupEventListeners() {
+        // Analysis mode toggles
+        document.querySelectorAll('input[name="analysis"]').forEach(radio => {
+          radio.addEventListener('change', function() {
+            if (this.checked) {
+              const startTime = performance.now();
+              LAYER_MANAGER.updateLayer(this.value);
+              const duration = performance.now() - startTime;
+              PERFORMANCE.logTiming('Analysis mode change', duration);
+            }
+          });
+        });
+
+        // Display options
+        document.getElementById('opacity-slider').addEventListener('input', function() {
+          if (STATE.currentLayer) {
+            STATE.currentLayer.setOpacity(parseFloat(this.value));
+          }
+        });
+
+        document.getElementById('enhanced-contrast').addEventListener('change', function() {
+          const currentMode = document.querySelector('input[name="analysis"]:checked').value;
+          // Enhance contrast by adjusting color functions
+          LAYER_MANAGER.updateLayer(currentMode);
+        });
+
+        // Window resize handler
+        window.addEventListener('resize', () => {
+          STATE.map.invalidateSize();
+          console.log('Map resized');
+        });
+      }
+
+      // === Main Initialization ===
+      async function initializeMap() {
+        try {
+          // Initialize map
+          STATE.map = L.map("map", {
+            worldCopyJump: true,                 // keep lng in [-180, 180]
+            maxBounds: [[-85, -180], [85, 180]], // prevent drifting to poles/overflow
+            maxBoundsViscosity: 0.8              // gentle “rubber band” at edges
+            }).setView([CONFIG.demo.centerLat, CONFIG.demo.centerLng], CONFIG.demo.zoom);
+
+          // Add base layer
+            L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            maxZoom: 18,
+            noWrap: true                         // stop infinite horizontal world copies
+            }).addTo(STATE.map);
+
+
+          PERFORMANCE.updateLoadingProgress();
+
+          // Initialize chart
+          initializeChart();
+
+          // Setup event handlers
+          EVENT_HANDLERS.setupKeyboardShortcuts();
+          EVENT_HANDLERS.setupMapEvents();
+          setupEventListeners();
+
+          // Try to load GeoTIFF
+          try {
+            document.getElementById('status').textContent = 'Loading GeoTIFF...';
+            
+            const response = await fetch("/data/analysis/dem_clipped_Gray.tif");
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            
+            const arrayBuffer = await response.arrayBuffer();
+            STATE.georasterData = await parseGeoraster(arrayBuffer);
+            
+            console.log('GeoTIFF loaded successfully');
+            document.getElementById('status').textContent = 'GeoTIFF Loaded';
+            document.getElementById('status').className = 'status-indicator success';
+            
+            LAYER_MANAGER.updateLayer('elevation');
+            STATE.map.fitBounds(STATE.currentLayer.getBounds(), { padding: [10, 10], animate: false });
+            
+            PERFORMANCE.updateLoadingProgress();
+            
+          } catch (error) {
+            console.log('GeoTIFF failed to load, using demo mode:', error);
+            initializeDemo();
+          }
+
+          // Final setup
+          STATE.isInitialized = true;
+          PERFORMANCE.updateLoadingProgress();
+          
+          // Start performance monitoring
+          PERFORMANCE.monitorMemory();
+          
+          // Show welcome message
+          POPUP_MANAGER.showWelcome();
+          
+          const totalTime = performance.now() - PERFORMANCE.startTime;
+          console.log(`Map initialization complete in ${totalTime.toFixed(2)}ms`);
+          
+        } catch (error) {
+          console.error('Failed to initialize map:', error);
+          POPUP_MANAGER.showError(error, 'Map initialization');
+        }
+      }
+
+      // Start the application
+      document.addEventListener('DOMContentLoaded', initializeMap);
+    </script>
+  </body>
+</html>
